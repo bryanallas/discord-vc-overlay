@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A transparent macOS voice chat overlay powered by a Discord bot.",
+  "description": "A transparent macOS voice chat overlay connected to Discord desktop.",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -13,8 +13,6 @@
     "dist:mac": "npm run build && electron-builder --mac --x64 --arm64"
   },
   "dependencies": {
-    "@discordjs/voice": "^0.18.0",
-    "discord.js": "^14.22.1",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

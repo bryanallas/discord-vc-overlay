@@ -36,7 +36,7 @@ export interface OverlayApi {
   getStatus: () => Promise<string>
   getVoiceSnapshot: () => Promise<VoiceSnapshot>
   saveSettings: (settings: Partial<AppSettings>) => Promise<AppSettings>
-  connect: (botToken: string, userId: string) => Promise<ConnectResult>
+  connect: () => Promise<ConnectResult>
   disconnect: () => Promise<void>
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => () => void
   onVoiceUpdate: (callback: (snapshot: VoiceSnapshot) => void) => () => void

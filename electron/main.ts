@@ -2,9 +2,11 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { BotMonitor } from './bot'
+import { DiscordRpcMonitor } from './rpc'
 import type { AppSettings, VoiceSnapshot } from './types'
 
+const clientId = __DISCORD_CLIENT_ID__
+const tokenExchangeUrl = __DISCORD_TOKEN_EXCHANGE_URL__
 const defaultSettings: AppSettings = {
   keepOnTop: true,
   showVcName: true,
@@ -26,7 +28,7 @@ let latestSnapshot: VoiceSnapshot = {
   participants: [],
   message: 'Disconnected'
 }
-const monitor = new BotMonitor()
+const monitor = new DiscordRpcMonitor()
 
 function sendToWindows(channel: string, value: unknown): void {
   for (const window of [settingsWindow, overlayWindow]) {
@@ -154,12 +156,22 @@ function forwardVoiceSnapshot(snapshot: VoiceSnapshot): void {
 }
 
 async function clearSavedCredentials(): Promise<void> {
-  const tokenPath = join(app.getPath('userData'), 'bot-token.enc')
-  const userPath = join(app.getPath('userData'), 'tracked-user.txt')
-  await Promise.all([
-    existsSync(tokenPath) ? unlink(tokenPath) : Promise.resolve(),
-    existsSync(userPath) ? unlink(userPath) : Promise.resolve()
-  ])
+  const tokenPath = join(app.getPath('userData'), 'discord-refresh-token.enc')
+  if (existsSync(tokenPath)) await unlink(tokenPath)
+}
+
+async function readSavedRefreshToken(): Promise<string | undefined> {
+  const tokenPath = join(app.getPath('userData'), 'discord-refresh-token.enc')
+  if (!existsSync(tokenPath)) return undefined
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('macOS secure storage is unavailable; sign in again.')
+  }
+  try {
+    return safeStorage.decryptString(await readFile(tokenPath))
+  } catch {
+    await clearSavedCredentials()
+    throw new Error('The saved Discord sign-in could not be decrypted. Please sign in again.')
+  }
 }
 
 ipcMain.handle('settings:get', () => settings)
@@ -171,26 +183,27 @@ ipcMain.handle('settings:save', async (_event, patch: Partial<AppSettings>) => {
   updateOverlaySettings()
   return settings
 })
-ipcMain.handle('discord:connect', async (_event, input: { botToken: string; userId: string }) => {
-  const botToken = typeof input?.botToken === 'string' ? input.botToken.trim() : ''
-  const userId = typeof input?.userId === 'string' ? input.userId.trim() : ''
-  if (!botToken || !/^\d{17,20}$/.test(userId)) {
-    return { connected: false, message: 'Enter a bot token and a valid Discord account ID.' }
+ipcMain.handle('discord:connect', async () => {
+  if (!/^\d{17,20}$/.test(clientId)) {
+    return { connected: false, message: 'Discord sign-in is not configured in this build.' }
+  }
+  if (!tokenExchangeUrl) {
+    return { connected: false, message: 'The Discord OAuth service is not configured in this build.' }
   }
   if (!safeStorage.isEncryptionAvailable()) {
-    return { connected: false, message: 'macOS secure storage is unavailable; the bot token was not saved.' }
+    return { connected: false, message: 'macOS secure storage is unavailable; sign-in was not saved.' }
   }
 
   try {
-    await clearSavedCredentials()
-    await monitor.start(botToken, userId)
-    const encryptedToken = safeStorage.encryptString(botToken)
-    await writeFile(join(app.getPath('userData'), 'bot-token.enc'), encryptedToken)
-    await writeFile(join(app.getPath('userData'), 'tracked-user.txt'), userId)
-    return { connected: true, message: 'Connecting to Discord…' }
+    const refreshToken = await readSavedRefreshToken()
+    const newRefreshToken = await monitor.start(clientId, tokenExchangeUrl, refreshToken)
+    await writeFile(
+      join(app.getPath('userData'), 'discord-refresh-token.enc'),
+      safeStorage.encryptString(newRefreshToken)
+    )
+    return { connected: true, message: 'Discord account connected.' }
   } catch (error) {
     await monitor.stop()
-    await clearSavedCredentials()
     return {
       connected: false,
       message: error instanceof Error ? error.message : 'Could not connect to Discord.'
@@ -213,18 +226,17 @@ app.whenReady().then(async () => {
 
   createSettingsWindow()
   createOverlayWindow()
-  const tokenPath = join(app.getPath('userData'), 'bot-token.enc')
-  const userPath = join(app.getPath('userData'), 'tracked-user.txt')
-  if (existsSync(tokenPath) && existsSync(userPath)) {
+  const tokenPath = join(app.getPath('userData'), 'discord-refresh-token.enc')
+  if (existsSync(tokenPath)) {
     if (!safeStorage.isEncryptionAvailable()) {
-      broadcastStatus('macOS secure storage is unavailable; reconnect to Discord.')
-    } else {
-      const encryptedToken = await readFile(tokenPath)
-      const userId = (await readFile(userPath, 'utf8')).trim()
+      broadcastStatus('macOS secure storage is unavailable; sign in again.')
+    } else if (/^\d{17,20}$/.test(clientId) && tokenExchangeUrl) {
       try {
-        await monitor.start(safeStorage.decryptString(encryptedToken), userId)
+        const refreshToken = await readSavedRefreshToken()
+        if (!refreshToken) return
+        const newRefreshToken = await monitor.start(clientId, tokenExchangeUrl, refreshToken)
+        await writeFile(tokenPath, safeStorage.encryptString(newRefreshToken))
       } catch (error) {
-        await clearSavedCredentials()
         broadcastStatus(
           error instanceof Error ? error.message : 'Could not restore the Discord connection.'
         )

@@ -1,0 +1,8 @@
+name = "discord-vc-overlay-oauth"
+main = "src/index.ts"
+compatibility_date = "2026-10-26"
+
+[vars]
+# Set these to your Discord application's public client ID and registered redirect URI.
+DISCORD_CLIENT_ID = ""
+DISCORD_REDIRECT_URI = ""

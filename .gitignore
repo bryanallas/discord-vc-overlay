@@ -3,3 +3,5 @@ out/
 dist/
 release/
 .DS_Store
+.env
+.dev.vars

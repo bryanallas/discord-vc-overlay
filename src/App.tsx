@@ -3,9 +3,7 @@ import {
   AudioLines,
   CircleHelp,
   Eye,
-  EyeOff,
   Headphones,
-  LockKeyhole,
   MicOff,
   MonitorCog,
   Radio,
@@ -32,7 +30,7 @@ const emptySnapshot: VoiceSnapshot = {
   guildName: null,
   channelName: null,
   participants: [],
-  message: 'Connect a Discord bot to get started.'
+  message: 'Sign in with Discord to get started.'
 }
 
 export default function App() {
@@ -40,10 +38,7 @@ export default function App() {
   const [settings, setSettings] = useState(defaults)
   const [snapshot, setSnapshot] = useState(emptySnapshot)
   const [status, setStatus] = useState('Not connected')
-  const [botToken, setBotToken] = useState('')
-  const [userId, setUserId] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const [showToken, setShowToken] = useState(false)
 
   useEffect(() => {
     const removeSettings = window.overlayApi.onSettingsUpdate(setSettings)
@@ -84,9 +79,8 @@ export default function App() {
   const connect = async () => {
     setConnecting(true)
     try {
-      const result = await window.overlayApi.connect(botToken, userId)
+      const result = await window.overlayApi.connect()
       setStatus(result.message)
-      if (result.connected) setBotToken('')
     } catch (error) {
       setStatus(`Could not connect: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
@@ -160,55 +154,34 @@ export default function App() {
           <div className="section-icon purple"><Radio size={18} /></div>
           <div>
             <h2>Connect to Discord</h2>
-            <p>Use a bot in servers where you want the overlay to work.</p>
+            <p>Sign in securely through the Discord desktop app.</p>
           </div>
           <div className={`connection-pill ${snapshot.connected ? 'is-connected' : ''}`}>
             <span /> {snapshot.connected ? 'Connected' : 'Not connected'}
           </div>
         </div>
-        <div className="connect-form">
-          <label className="field">
-            <span>BOT TOKEN <span className="required">*</span></span>
-            <div className="input-wrap">
-              <LockKeyhole size={15} />
-              <input
-                type={showToken ? 'text' : 'password'}
-                autoComplete="new-password"
-                placeholder="Paste your Discord bot token"
-                value={botToken}
-                onChange={(event) => setBotToken(event.target.value)}
-              />
-              <button className="icon-button" aria-label={showToken ? 'Hide token' : 'Show token'} onClick={() => setShowToken(!showToken)}>
-                {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
+        <div className="connect-panel">
+          <div className="connect-copy">
+            <div className="discord-login-mark"><AudioLines size={17} /></div>
+            <div>
+              <strong>Continue with Discord</strong>
+              <span>Approve this app in Discord to share voice-channel details.</span>
             </div>
-          </label>
-          <label className="field">
-            <span>ACCOUNT ID <span className="required">*</span></span>
-            <div className="input-wrap">
-              <span className="hash-icon">#</span>
-              <input
-                inputMode="numeric"
-                placeholder="The Discord account to follow"
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-              />
-            </div>
-          </label>
+          </div>
           <div className="connect-actions">
             {snapshot.connected && (
               <button className="secondary-button" onClick={() => void disconnect()}>Disconnect</button>
             )}
-            <button className="primary-button" onClick={() => void connect()} disabled={!botToken || !userId || connecting}>
+            <button className="primary-button" onClick={() => void connect()} disabled={connecting}>
               {connecting ? <span className="spinner" /> : <Radio size={15} />}
-              {connecting ? 'Connecting…' : 'Connect bot'}
+              {connecting ? 'Connecting…' : snapshot.connected ? 'Reconnect' : 'Sign in with Discord'}
             </button>
           </div>
         </div>
         <div className="security-note">
           <ShieldCheck size={15} />
-          <span>Your bot token is encrypted using macOS secure storage and stays on this device.</span>
-          <button className="help-button" title="The app uses a Discord bot token; it does not log in as your personal account.">
+          <span>Discord asks for permission. Your refresh token is encrypted and stored on this Mac.</span>
+          <button className="help-button" title="Voice state is read from the Discord desktop app's authorized local RPC connection.">
             <CircleHelp size={15} />
           </button>
         </div>

@@ -6,8 +6,7 @@ const api: OverlayApi = {
   getStatus: () => ipcRenderer.invoke('discord:status:get'),
   getVoiceSnapshot: () => ipcRenderer.invoke('voice:get'),
   saveSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('settings:save', settings),
-  connect: (botToken: string, userId: string): Promise<ConnectResult> =>
-    ipcRenderer.invoke('discord:connect', { botToken, userId }),
+  connect: (): Promise<ConnectResult> => ipcRenderer.invoke('discord:connect'),
   disconnect: () => ipcRenderer.invoke('discord:disconnect'),
   onSettingsUpdate: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, settings: AppSettings) => callback(settings)
