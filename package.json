@@ -1,0 +1,48 @@
+{
+  "name": "discord-vc-overlay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A transparent macOS voice chat overlay powered by a Discord bot.",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "dist:mac": "npm run build && electron-builder --mac --x64 --arm64"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.18.0",
+    "discord.js": "^14.22.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "build": {
+    "appId": "com.discordvcoverlay.app",
+    "productName": "Discord VC Overlay",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ]
+  }
+}
