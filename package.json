@@ -6,7 +6,9 @@
   "description": "A transparent macOS voice chat overlay connected to Discord desktop.",
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "concurrently --kill-others-on-fail \"npm:dev:oauth\" \"npm:dev:app\"",
+    "dev:app": "electron-vite dev",
+    "dev:oauth": "wrangler dev --config oauth-worker/wrangler.toml --ip 127.0.0.1 --port 8787",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
@@ -22,11 +24,13 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.1",
     "electron": "^45.0.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.0",
     "typescript": "^5.8.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "wrangler": "^4.45.0"
   },
   "build": {
     "appId": "com.discordvcoverlay.app",
