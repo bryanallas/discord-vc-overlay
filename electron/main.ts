@@ -17,6 +17,7 @@ const defaultSettings: AppSettings = {
 let settings = { ...defaultSettings }
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
+let statusMessage = 'Not connected'
 let latestSnapshot: VoiceSnapshot = {
   connected: false,
   targetInVoice: false,
@@ -31,6 +32,11 @@ function sendToWindows(channel: string, value: unknown): void {
   for (const window of [settingsWindow, overlayWindow]) {
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   }
+}
+
+function broadcastStatus(message: string): void {
+  statusMessage = message
+  sendToWindows('discord:status', message)
 }
 
 function loadRenderer(window: BrowserWindow, overlay = false): void {
@@ -157,6 +163,8 @@ async function clearSavedCredentials(): Promise<void> {
 }
 
 ipcMain.handle('settings:get', () => settings)
+ipcMain.handle('discord:status:get', () => statusMessage)
+ipcMain.handle('voice:get', () => latestSnapshot)
 ipcMain.handle('settings:save', async (_event, patch: Partial<AppSettings>) => {
   settings = sanitizeSettings(patch)
   await persistSettings()
@@ -182,6 +190,7 @@ ipcMain.handle('discord:connect', async (_event, input: { botToken: string; user
     return { connected: true, message: 'Connecting to Discord…' }
   } catch (error) {
     await monitor.stop()
+    await clearSavedCredentials()
     return {
       connected: false,
       message: error instanceof Error ? error.message : 'Could not connect to Discord.'
@@ -194,7 +203,7 @@ ipcMain.handle('discord:disconnect', async () => {
 })
 
 monitor.on('voice', (snapshot: VoiceSnapshot) => forwardVoiceSnapshot(snapshot))
-monitor.on('status', (message: string) => sendToWindows('discord:status', message))
+monitor.on('status', (message: string) => broadcastStatus(message))
 
 app.whenReady().then(async () => {
   const settingsPath = join(app.getPath('userData'), 'settings.json')
@@ -206,17 +215,20 @@ app.whenReady().then(async () => {
   createOverlayWindow()
   const tokenPath = join(app.getPath('userData'), 'bot-token.enc')
   const userPath = join(app.getPath('userData'), 'tracked-user.txt')
-  if (existsSync(tokenPath) && existsSync(userPath) && safeStorage.isEncryptionAvailable()) {
-    const encryptedToken = await readFile(tokenPath)
-    const userId = (await readFile(userPath, 'utf8')).trim()
-    try {
-      await monitor.start(safeStorage.decryptString(encryptedToken), userId)
-    } catch (error) {
-      await clearSavedCredentials()
-      sendToWindows(
-        'discord:status',
-        error instanceof Error ? error.message : 'Could not restore the Discord connection.'
-      )
+  if (existsSync(tokenPath) && existsSync(userPath)) {
+    if (!safeStorage.isEncryptionAvailable()) {
+      broadcastStatus('macOS secure storage is unavailable; reconnect to Discord.')
+    } else {
+      const encryptedToken = await readFile(tokenPath)
+      const userId = (await readFile(userPath, 'utf8')).trim()
+      try {
+        await monitor.start(safeStorage.decryptString(encryptedToken), userId)
+      } catch (error) {
+        await clearSavedCredentials()
+        broadcastStatus(
+          error instanceof Error ? error.message : 'Could not restore the Discord connection.'
+        )
+      }
     }
   }
   app.on('activate', () => {
@@ -227,7 +239,6 @@ app.whenReady().then(async () => {
       settingsWindow?.show()
     }
   })
-
 })
 
 app.on('window-all-closed', () => {

@@ -46,10 +46,22 @@ export default function App() {
   const [showToken, setShowToken] = useState(false)
 
   useEffect(() => {
-    void window.overlayApi.getSettings().then(setSettings)
+    const removeSettings = window.overlayApi.onSettingsUpdate(setSettings)
     const removeVoice = window.overlayApi.onVoiceUpdate(setSnapshot)
     const removeStatus = window.overlayApi.onStatusUpdate(setStatus)
+    void Promise.all([
+      window.overlayApi.getSettings(),
+      window.overlayApi.getStatus(),
+      window.overlayApi.getVoiceSnapshot()
+    ]).then(([savedSettings, savedStatus, savedSnapshot]) => {
+      setSettings(savedSettings)
+      setStatus(savedStatus)
+      setSnapshot(savedSnapshot)
+    }).catch((error: unknown) => {
+      setStatus(`Could not load app state: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    })
     return () => {
+      removeSettings()
       removeVoice()
       removeStatus()
     }
@@ -83,8 +95,12 @@ export default function App() {
   }
 
   const disconnect = async () => {
-    await window.overlayApi.disconnect()
-    setStatus('Disconnected')
+    try {
+      await window.overlayApi.disconnect()
+      setStatus('Disconnected')
+    } catch (error) {
+      setStatus(`Could not disconnect: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   if (isOverlay) {

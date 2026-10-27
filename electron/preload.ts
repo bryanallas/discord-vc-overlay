@@ -3,10 +3,17 @@ import type { AppSettings, ConnectResult, OverlayApi, VoiceSnapshot } from './ty
 
 const api: OverlayApi = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  getStatus: () => ipcRenderer.invoke('discord:status:get'),
+  getVoiceSnapshot: () => ipcRenderer.invoke('voice:get'),
   saveSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('settings:save', settings),
   connect: (botToken: string, userId: string): Promise<ConnectResult> =>
     ipcRenderer.invoke('discord:connect', { botToken, userId }),
   disconnect: () => ipcRenderer.invoke('discord:disconnect'),
+  onSettingsUpdate: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, settings: AppSettings) => callback(settings)
+    ipcRenderer.on('settings:update', listener)
+    return () => ipcRenderer.removeListener('settings:update', listener)
+  },
   onVoiceUpdate: (callback: (snapshot: VoiceSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: VoiceSnapshot) => callback(snapshot)
     ipcRenderer.on('voice:update', listener)
