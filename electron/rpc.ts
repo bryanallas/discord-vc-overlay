@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { connect as connectSocket, type Socket } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
-import type { Participant, VoiceSnapshot } from './types'
+import type { Participant, VoiceSetting, VoiceSnapshot } from './types'
 
 const RPC_VERSION = 1
 const MAX_FRAME_SIZE = 8 * 1024 * 1024
@@ -47,6 +47,11 @@ type RpcChannel = {
   name: string
   guild_id?: string
   voice_states?: RpcVoiceState[]
+}
+
+type RpcVoiceSettings = {
+  mute?: boolean
+  deaf?: boolean
 }
 
 type PendingRequest = {
@@ -95,6 +100,8 @@ export class DiscordRpcMonitor extends EventEmitter {
   private guildId: string | null = null
   private guildName: string | null = null
   private authenticated = false
+  private selfMuted = false
+  private selfDeafened = false
   private stopped = true
   private readyResolve: (() => void) | null = null
   private readyReject: ((error: Error) => void) | null = null
@@ -147,6 +154,9 @@ export class DiscordRpcMonitor extends EventEmitter {
       this.authenticated = true
       this.subscribe('VOICE_CHANNEL_SELECT')
       await this.syncSelectedChannel()
+      void this.syncVoiceSettings().catch((error: unknown) => {
+        this.emit('status', `Could not read Discord voice settings: ${errorMessage(error)}`)
+      })
       this.refreshTimer = setInterval(() => {
         void this.syncSelectedChannel().catch((error: unknown) => this.emit('status', errorMessage(error)))
       }, 20_000)
@@ -178,6 +188,29 @@ export class DiscordRpcMonitor extends EventEmitter {
     this.resetVoiceState()
     this.emitSnapshot(false, 'Disconnected')
     this.emit('status', 'Disconnected')
+  }
+
+  async toggleVoiceSetting(setting: VoiceSetting): Promise<boolean> {
+    if (!this.authenticated) throw new Error('Connect to Discord before changing voice settings.')
+
+    await this.syncVoiceSettings()
+    const value = setting === 'mute' ? !this.selfMuted : !this.selfDeafened
+    await this.request('SET_VOICE_SETTINGS', { [setting]: value })
+    if (setting === 'mute') this.selfMuted = value
+    else this.selfDeafened = value
+    this.emitSnapshot(true, value
+      ? setting === 'mute' ? 'Microphone muted.' : 'Audio deafened.'
+      : setting === 'mute' ? 'Microphone unmuted.' : 'Audio undeafened.')
+    return value
+  }
+
+  private async syncVoiceSettings(): Promise<void> {
+    if (!this.authenticated) return
+    const response = await this.request('GET_VOICE_SETTINGS', {})
+    const settings = response.data as RpcVoiceSettings | null | undefined
+    if (typeof settings?.mute === 'boolean') this.selfMuted = settings.mute
+    if (typeof settings?.deaf === 'boolean') this.selfDeafened = settings.deaf
+    this.emitSnapshot(true, `Watching ${this.channelName ?? 'voice channel'}`)
   }
 
   private async authorize(clientId: string, tokenExchangeUrl: string): Promise<TokenResponse> {
@@ -369,7 +402,7 @@ export class DiscordRpcMonitor extends EventEmitter {
 
   private request(
     cmd: string,
-    args?: Record<string, string | string[]>,
+    args?: Record<string, string | string[] | boolean>,
     timeoutMs = REQUEST_TIMEOUT_MS
   ): Promise<RpcEvent> {
     if (!this.socket || this.socket.destroyed) {
@@ -433,6 +466,8 @@ export class DiscordRpcMonitor extends EventEmitter {
     this.channelName = null
     this.guildId = null
     this.guildName = null
+    this.selfMuted = false
+    this.selfDeafened = false
   }
 
   private emitSnapshot(connected: boolean, message: string): void {
@@ -442,7 +477,9 @@ export class DiscordRpcMonitor extends EventEmitter {
       guildName: this.guildName,
       channelName: this.channelName,
       participants: [...this.participants.values()].sort((left, right) => left.name.localeCompare(right.name)),
-      message
+      message,
+      selfMuted: this.selfMuted,
+      selfDeafened: this.selfDeafened
     }
     this.emit('voice', snapshot)
   }

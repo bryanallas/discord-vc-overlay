@@ -8,6 +8,7 @@ const api: OverlayApi = {
   saveSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('settings:save', settings),
   connect: (): Promise<ConnectResult> => ipcRenderer.invoke('discord:connect'),
   disconnect: () => ipcRenderer.invoke('discord:disconnect'),
+  toggleVoiceSetting: (setting) => ipcRenderer.invoke('discord:voice-setting:toggle', setting),
   onSettingsUpdate: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, settings: AppSettings) => callback(settings)
     ipcRenderer.on('settings:update', listener)

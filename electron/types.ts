@@ -3,8 +3,19 @@ export interface AppSettings {
   showVcName: boolean
   showAccountNames: boolean
   onlyShowTalking: boolean
+  showOverlayMute: boolean
+  showOverlayDeafen: boolean
+  showOverlayDisconnect: boolean
   opacity: number
   size: number
+  alignment: 'left' | 'right'
+  hotkeys: HotkeySettings
+}
+
+export interface HotkeySettings {
+  mute: string
+  deafen: string
+  disconnect: string
 }
 
 export interface Participant {
@@ -24,7 +35,11 @@ export interface VoiceSnapshot {
   channelName: string | null
   participants: Participant[]
   message: string
+  selfMuted: boolean
+  selfDeafened: boolean
 }
+
+export type VoiceSetting = 'mute' | 'deaf'
 
 export interface ConnectResult {
   connected: boolean
@@ -38,6 +53,7 @@ export interface OverlayApi {
   saveSettings: (settings: Partial<AppSettings>) => Promise<AppSettings>
   connect: () => Promise<ConnectResult>
   disconnect: () => Promise<void>
+  toggleVoiceSetting: (setting: VoiceSetting) => Promise<boolean>
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => () => void
   onVoiceUpdate: (callback: (snapshot: VoiceSnapshot) => void) => () => void
   onStatusUpdate: (callback: (message: string) => void) => () => void

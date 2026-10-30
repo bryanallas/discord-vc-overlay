@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  AlignLeft,
+  AlignRight,
   AudioLines,
   CircleHelp,
   Eye,
   Headphones,
   MicOff,
+  Mic,
   MonitorCog,
+  PhoneOff,
   Radio,
   Settings2,
   ShieldCheck,
@@ -13,15 +17,24 @@ import {
   Sparkles,
   VolumeX
 } from 'lucide-react'
-import type { AppSettings, Participant, VoiceSnapshot } from '../electron/types'
+import type { AppSettings, Participant, VoiceSetting, VoiceSnapshot } from '../electron/types'
 
 const defaults: AppSettings = {
   keepOnTop: true,
   showVcName: true,
   showAccountNames: true,
   onlyShowTalking: false,
+  showOverlayMute: true,
+  showOverlayDeafen: true,
+  showOverlayDisconnect: true,
   opacity: 0.92,
-  size: 1
+  size: 1,
+  alignment: 'left',
+  hotkeys: {
+    mute: 'CommandOrControl+Alt+Shift+M',
+    deafen: 'CommandOrControl+Alt+Shift+D',
+    disconnect: 'CommandOrControl+Alt+Shift+X'
+  }
 }
 
 const emptySnapshot: VoiceSnapshot = {
@@ -30,18 +43,25 @@ const emptySnapshot: VoiceSnapshot = {
   guildName: null,
   channelName: null,
   participants: [],
-  message: 'Sign in with Discord to get started.'
+  message: 'Sign in with Discord to get started.',
+  selfMuted: false,
+  selfDeafened: false
 }
 
 export default function App() {
   const isOverlay = new URLSearchParams(window.location.search).has('overlay')
   const [settings, setSettings] = useState(defaults)
+  const [hotkeyDrafts, setHotkeyDrafts] = useState(defaults.hotkeys)
   const [snapshot, setSnapshot] = useState(emptySnapshot)
   const [status, setStatus] = useState('Not connected')
   const [connecting, setConnecting] = useState(false)
 
   useEffect(() => {
-    const removeSettings = window.overlayApi.onSettingsUpdate(setSettings)
+    const applySettings = (nextSettings: AppSettings) => {
+      setSettings(nextSettings)
+      setHotkeyDrafts(nextSettings.hotkeys)
+    }
+    const removeSettings = window.overlayApi.onSettingsUpdate(applySettings)
     const removeVoice = window.overlayApi.onVoiceUpdate(setSnapshot)
     const removeStatus = window.overlayApi.onStatusUpdate(setStatus)
     void Promise.all([
@@ -49,7 +69,7 @@ export default function App() {
       window.overlayApi.getStatus(),
       window.overlayApi.getVoiceSnapshot()
     ]).then(([savedSettings, savedStatus, savedSnapshot]) => {
-      setSettings(savedSettings)
+      applySettings(savedSettings)
       setStatus(savedStatus)
       setSnapshot(savedSnapshot)
     }).catch((error: unknown) => {
@@ -97,12 +117,22 @@ export default function App() {
     }
   }
 
+  const toggleVoiceSetting = async (setting: VoiceSetting) => {
+    try {
+      await window.overlayApi.toggleVoiceSetting(setting)
+    } catch (error) {
+      setStatus(`Could not change voice setting: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
   if (isOverlay) {
     return (
       <Overlay
         settings={settings}
         snapshot={snapshot}
         participants={participants}
+        onToggleVoiceSetting={(setting) => void toggleVoiceSetting(setting)}
+        onDisconnect={() => void disconnect()}
       />
     )
   }
@@ -225,6 +255,27 @@ export default function App() {
             checked={settings.onlyShowTalking}
             onChange={(checked) => updateSetting({ onlyShowTalking: checked })}
           />
+          <ToggleRow
+            icon={<Mic size={17} />}
+            title="Show mute button"
+            description="Display the mute control on the overlay"
+            checked={settings.showOverlayMute}
+            onChange={(checked) => updateSetting({ showOverlayMute: checked })}
+          />
+          <ToggleRow
+            icon={<VolumeX size={17} />}
+            title="Show deafen button"
+            description="Display the deafen control on the overlay"
+            checked={settings.showOverlayDeafen}
+            onChange={(checked) => updateSetting({ showOverlayDeafen: checked })}
+          />
+          <ToggleRow
+            icon={<PhoneOff size={17} />}
+            title="Show disconnect button"
+            description="Display the disconnect control on the overlay"
+            checked={settings.showOverlayDisconnect}
+            onChange={(checked) => updateSetting({ showOverlayDisconnect: checked })}
+          />
           <div className="slider-row">
             <div className="slider-label">
               <div className="setting-icon"><SlidersHorizontal size={17} /></div>
@@ -247,11 +298,11 @@ export default function App() {
           <div className="slider-row">
             <div className="slider-label">
               <div className="setting-icon"><MonitorCog size={17} /></div>
-              <div><strong>Window size</strong><small>Resize the overlay</small></div>
+              <div><strong>Overlay Window Size</strong><small>Resize the overlay</small></div>
             </div>
             <div className="slider-control">
               <input
-                aria-label="Window size"
+                aria-label="Overlay Window Size"
                 type="range"
                 min="0.7"
                 max="1.5"
@@ -263,6 +314,58 @@ export default function App() {
               <span>{Math.round(settings.size * 100)}%</span>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="settings-card placement-card">
+        <div className="section-heading settings-heading">
+          <div className="section-icon purple"><MonitorCog size={18} /></div>
+          <div>
+            <h2>Placement &amp; hotkeys</h2>
+            <p>Choose an edge and set shortcuts that work anywhere.</p>
+          </div>
+        </div>
+        <div className="placement-content">
+          <div className="alignment-row">
+            <div className="toggle-copy">
+              <strong>Horizontal alignment</strong>
+              <small>Position the overlay at a screen edge</small>
+            </div>
+            <div className="alignment-options">
+              <button
+                className={`alignment-button ${settings.alignment === 'left' ? 'selected' : ''}`}
+                aria-pressed={settings.alignment === 'left'}
+                onClick={() => updateSetting({ alignment: 'left' })}
+              ><AlignLeft size={15} /> Left</button>
+              <button
+                className={`alignment-button ${settings.alignment === 'right' ? 'selected' : ''}`}
+                aria-pressed={settings.alignment === 'right'}
+                onClick={() => updateSetting({ alignment: 'right' })}
+              ><AlignRight size={15} /> Right</button>
+            </div>
+          </div>
+          <div className="hotkey-grid">
+            {([
+              ['mute', 'Mute / unmute'],
+              ['deafen', 'Deafen / undeafen'],
+              ['disconnect', 'Disconnect']
+            ] as const).map(([key, label]) => (
+              <label className="hotkey-field" key={key}>
+                <span>{label}</span>
+                <input
+                  type="text"
+                  aria-label={`${label} hotkey`}
+                  value={hotkeyDrafts[key]}
+                  placeholder="Leave blank to disable"
+                  onChange={(event) => {
+                    setHotkeyDrafts({ ...hotkeyDrafts, [key]: event.target.value })
+                  }}
+                  onBlur={() => updateSetting({ hotkeys: hotkeyDrafts })}
+                />
+              </label>
+            ))}
+          </div>
+          <p className="hotkey-help">Use accelerator format, e.g. CommandOrControl+Alt+Shift+M. Leave blank to disable a shortcut.</p>
         </div>
       </section>
 
@@ -303,11 +406,13 @@ function Overlay(props: {
   settings: AppSettings
   snapshot: VoiceSnapshot
   participants: Participant[]
+  onToggleVoiceSetting: (setting: VoiceSetting) => void
+  onDisconnect: () => void
 }) {
-  const { settings, snapshot, participants } = props
+  const { settings, snapshot, participants, onToggleVoiceSetting, onDisconnect } = props
   const channelTitle = settings.showVcName ? snapshot.channelName : null
   return (
-    <div className="overlay-root" style={{ '--overlay-opacity': settings.opacity } as React.CSSProperties}>
+    <div className="overlay-root" style={{ zoom: settings.size }}>
       <div className="overlay-card">
         {channelTitle && (
           <div className="overlay-header">
@@ -319,7 +424,10 @@ function Overlay(props: {
         {participants.length > 0 ? (
           <div className="participant-list">
             {participants.map((participant) => (
-              <div className={`participant ${participant.talking ? 'is-talking' : ''}`} key={participant.id}>
+              <div
+                className={`participant ${settings.alignment === 'right' ? 'info-right' : ''} ${participant.talking ? 'is-talking' : ''}`}
+                key={participant.id}
+              >
                 <img
                   src={participant.avatarUrl}
                   alt=""
@@ -332,7 +440,6 @@ function Overlay(props: {
                 <div className="participant-state">
                   {participant.muted && <MicOff size={15} aria-label="Muted" />}
                   {participant.deafened && <VolumeX size={15} aria-label="Deafened" />}
-                  {!participant.muted && !participant.deafened && participant.talking && <AudioLines size={16} className="talking-icon" aria-label="Speaking" />}
                 </div>
               </div>
             ))}
@@ -341,6 +448,42 @@ function Overlay(props: {
           <div className="overlay-empty">
             <div className="empty-icon">{snapshot.connected ? <Headphones size={22} /> : <Radio size={22} />}</div>
             <span>{snapshot.connected ? 'Waiting for voice chat' : 'Connect a bot to begin'}</span>
+          </div>
+        )}
+        {(settings.showOverlayMute || settings.showOverlayDeafen || settings.showOverlayDisconnect) && (
+          <div className="overlay-controls">
+          {settings.showOverlayMute && <button
+            className={`overlay-control ${snapshot.selfMuted ? 'active' : ''}`}
+            title={snapshot.selfMuted ? 'Unmute microphone' : 'Mute microphone'}
+            aria-label={snapshot.selfMuted ? 'Unmute microphone' : 'Mute microphone'}
+            aria-pressed={snapshot.selfMuted}
+            disabled={!snapshot.connected}
+            onClick={() => onToggleVoiceSetting('mute')}
+          >
+            {snapshot.selfMuted ? <MicOff size={15} /> : <Mic size={15} />}
+            <span>{snapshot.selfMuted ? 'Unmute' : 'Mute'}</span>
+          </button>}
+          {settings.showOverlayDeafen && <button
+            className={`overlay-control ${snapshot.selfDeafened ? 'active' : ''}`}
+            title={snapshot.selfDeafened ? 'Undeafen audio' : 'Deafen audio'}
+            aria-label={snapshot.selfDeafened ? 'Undeafen audio' : 'Deafen audio'}
+            aria-pressed={snapshot.selfDeafened}
+            disabled={!snapshot.connected}
+            onClick={() => onToggleVoiceSetting('deaf')}
+          >
+            <VolumeX size={15} />
+            <span>{snapshot.selfDeafened ? 'Undeafen' : 'Deafen'}</span>
+          </button>}
+          {settings.showOverlayDisconnect && <button
+            className="overlay-control disconnect-control"
+            title="Disconnect from Discord"
+            aria-label="Disconnect from Discord"
+            disabled={!snapshot.connected}
+            onClick={onDisconnect}
+          >
+            <PhoneOff size={15} />
+            <span>Disconnect</span>
+          </button>}
           </div>
         )}
       </div>

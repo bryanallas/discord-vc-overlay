@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain, safeStorage, screen } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -7,13 +7,23 @@ import type { AppSettings, VoiceSnapshot } from './types'
 
 const clientId = __DISCORD_CLIENT_ID__
 const tokenExchangeUrl = __DISCORD_TOKEN_EXCHANGE_URL__
+const SIZE_RESET_VERSION = 2
 const defaultSettings: AppSettings = {
   keepOnTop: true,
   showVcName: true,
   showAccountNames: true,
   onlyShowTalking: false,
+  showOverlayMute: true,
+  showOverlayDeafen: true,
+  showOverlayDisconnect: true,
   opacity: 0.92,
-  size: 1
+  size: 1,
+  alignment: 'left',
+  hotkeys: {
+    mute: 'CommandOrControl+Alt+Shift+M',
+    deafen: 'CommandOrControl+Alt+Shift+D',
+    disconnect: 'CommandOrControl+Alt+Shift+X'
+  }
 }
 
 let settings = { ...defaultSettings }
@@ -26,9 +36,12 @@ let latestSnapshot: VoiceSnapshot = {
   guildName: null,
   channelName: null,
   participants: [],
-  message: 'Disconnected'
+  message: 'Disconnected',
+  selfMuted: false,
+  selfDeafened: false
 }
 const monitor = new DiscordRpcMonitor()
+let registeredHotkeys: string[] = []
 
 function sendToWindows(channel: string, value: unknown): void {
   for (const window of [settingsWindow, overlayWindow]) {
@@ -67,6 +80,7 @@ function createSettingsWindow(): void {
     }
   })
   loadRenderer(settingsWindow)
+  settingsWindow.webContents.setZoomFactor(1)
   settingsWindow.on('closed', () => {
     settingsWindow = null
   })
@@ -76,8 +90,7 @@ function createOverlayWindow(): void {
   overlayWindow = new BrowserWindow({
     width: Math.round(360 * settings.size),
     height: Math.round(520 * settings.size),
-    minWidth: 260,
-    minHeight: 260,
+    opacity: settings.opacity,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -93,6 +106,7 @@ function createOverlayWindow(): void {
       sandbox: true
     }
   })
+  placeOverlayWindow()
   loadRenderer(overlayWindow, true)
   overlayWindow.on('closed', () => {
     overlayWindow = null
@@ -100,6 +114,9 @@ function createOverlayWindow(): void {
 }
 
 function sanitizeSettings(candidate: Partial<AppSettings>): AppSettings {
+  const hotkeys: Partial<AppSettings['hotkeys']> = candidate.hotkeys && typeof candidate.hotkeys === 'object'
+    ? candidate.hotkeys
+    : {}
   return {
     keepOnTop: typeof candidate.keepOnTop === 'boolean' ? candidate.keepOnTop : settings.keepOnTop,
     showVcName: typeof candidate.showVcName === 'boolean' ? candidate.showVcName : settings.showVcName,
@@ -109,22 +126,56 @@ function sanitizeSettings(candidate: Partial<AppSettings>): AppSettings {
     onlyShowTalking: typeof candidate.onlyShowTalking === 'boolean'
       ? candidate.onlyShowTalking
       : settings.onlyShowTalking,
+    showOverlayMute: typeof candidate.showOverlayMute === 'boolean'
+      ? candidate.showOverlayMute
+      : settings.showOverlayMute,
+    showOverlayDeafen: typeof candidate.showOverlayDeafen === 'boolean'
+      ? candidate.showOverlayDeafen
+      : settings.showOverlayDeafen,
+    showOverlayDisconnect: typeof candidate.showOverlayDisconnect === 'boolean'
+      ? candidate.showOverlayDisconnect
+      : settings.showOverlayDisconnect,
     opacity: typeof candidate.opacity === 'number'
       ? Math.min(1, Math.max(0.35, candidate.opacity))
       : settings.opacity,
     size: typeof candidate.size === 'number'
       ? Math.min(1.5, Math.max(0.7, candidate.size))
-      : settings.size
+      : settings.size,
+    alignment: candidate.alignment === 'left' || candidate.alignment === 'right'
+      ? candidate.alignment
+      : settings.alignment,
+    hotkeys: {
+      mute: typeof hotkeys.mute === 'string' ? hotkeys.mute.trim().slice(0, 80) : settings.hotkeys.mute,
+      deafen: typeof hotkeys.deafen === 'string' ? hotkeys.deafen.trim().slice(0, 80) : settings.hotkeys.deafen,
+      disconnect: typeof hotkeys.disconnect === 'string'
+        ? hotkeys.disconnect.trim().slice(0, 80)
+        : settings.hotkeys.disconnect
+    }
   }
 }
 
 async function persistSettings(): Promise<void> {
-  await writeFile(join(app.getPath('userData'), 'settings.json'), JSON.stringify(settings, null, 2))
+  await writeFile(
+    join(app.getPath('userData'), 'settings.json'),
+    JSON.stringify({ ...settings, sizeResetVersion: SIZE_RESET_VERSION }, null, 2)
+  )
 }
 
-function updateOverlaySettings(): void {
-  overlayWindow?.setAlwaysOnTop(settings.keepOnTop, 'floating')
-  resizeOverlay(latestSnapshot)
+function updateOverlaySettings(patch: Partial<AppSettings>): void {
+  if (patch.keepOnTop !== undefined) {
+    overlayWindow?.setAlwaysOnTop(settings.keepOnTop, 'floating')
+  }
+  if (patch.opacity !== undefined) {
+    overlayWindow?.setOpacity(settings.opacity)
+  }
+  const layoutChanged = patch.size !== undefined ||
+    patch.onlyShowTalking !== undefined ||
+    patch.showVcName !== undefined ||
+    patch.showAccountNames !== undefined ||
+    patch.showOverlayMute !== undefined ||
+    patch.showOverlayDeafen !== undefined ||
+    patch.showOverlayDisconnect !== undefined
+  if (layoutChanged) resizeOverlay(latestSnapshot)
   sendToWindows('settings:update', settings)
 }
 
@@ -134,13 +185,68 @@ function resizeOverlay(snapshot: VoiceSnapshot): void {
     ? snapshot.participants.filter((participant) => participant.talking).length
     : snapshot.participants.length
   const contentHeight = snapshot.targetInVoice
-    ? Math.min(760, Math.max(164, 84 + visibleCount * 60))
+    ? Math.max(212, 124 + visibleCount * 60)
     : 520
   overlayWindow.setContentSize(
     Math.round(360 * settings.size),
     Math.round(contentHeight * settings.size)
   )
-  overlayWindow.webContents.setZoomFactor(settings.size)
+}
+
+function placeOverlayWindow(): void {
+  if (!overlayWindow) return
+  const bounds = overlayWindow.getBounds()
+  const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y })
+  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  const margin = 12
+  const x = settings.alignment === 'left'
+    ? workAreaX + margin
+    : workAreaX + workAreaWidth - bounds.width - margin
+  const y = Math.max(workAreaY + margin, Math.min(bounds.y, workAreaY + workAreaHeight - bounds.height - margin))
+  overlayWindow.setPosition(x, y)
+}
+
+function registerHotkeys(): void {
+  for (const accelerator of registeredHotkeys) globalShortcut.unregister(accelerator)
+  registeredHotkeys = []
+
+  const failures: string[] = []
+  const seen = new Set<string>()
+  const actions = [
+    ['mute', settings.hotkeys.mute],
+    ['deafen', settings.hotkeys.deafen],
+    ['disconnect', settings.hotkeys.disconnect]
+  ] as const
+
+  for (const [action, accelerator] of actions) {
+    if (!accelerator) continue
+    if (seen.has(accelerator)) {
+      failures.push(`${accelerator} is assigned more than once`)
+      continue
+    }
+    seen.add(accelerator)
+    try {
+      const registered = globalShortcut.register(accelerator, () => {
+        const operation = action === 'disconnect'
+          ? disconnectDiscord()
+          : monitor.toggleVoiceSetting(action === 'mute' ? 'mute' : 'deaf')
+        void operation.catch((error: unknown) => {
+          broadcastStatus(`Hotkey action failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        })
+      })
+      if (registered) registeredHotkeys.push(accelerator)
+      else failures.push(`${accelerator} is already in use`)
+    } catch (error) {
+      failures.push(`${accelerator}: ${error instanceof Error ? error.message : 'Invalid accelerator'}`)
+    }
+  }
+
+  if (failures.length > 0) broadcastStatus(`Could not register hotkey(s): ${failures.join('; ')}`)
+}
+
+async function disconnectDiscord(): Promise<void> {
+  await monitor.stop()
+  await clearSavedCredentials()
 }
 
 function forwardVoiceSnapshot(snapshot: VoiceSnapshot): void {
@@ -180,7 +286,9 @@ ipcMain.handle('voice:get', () => latestSnapshot)
 ipcMain.handle('settings:save', async (_event, patch: Partial<AppSettings>) => {
   settings = sanitizeSettings(patch)
   await persistSettings()
-  updateOverlaySettings()
+  updateOverlaySettings(patch)
+  if (patch.hotkeys !== undefined) registerHotkeys()
+  if (patch.alignment !== undefined) placeOverlayWindow()
   return settings
 })
 ipcMain.handle('discord:connect', async () => {
@@ -211,8 +319,11 @@ ipcMain.handle('discord:connect', async () => {
   }
 })
 ipcMain.handle('discord:disconnect', async () => {
-  await monitor.stop()
-  await clearSavedCredentials()
+  await disconnectDiscord()
+})
+ipcMain.handle('discord:voice-setting:toggle', async (_event, setting: 'mute' | 'deaf') => {
+  if (setting !== 'mute' && setting !== 'deaf') throw new Error('Unsupported voice setting.')
+  return monitor.toggleVoiceSetting(setting)
 })
 
 monitor.on('voice', (snapshot: VoiceSnapshot) => forwardVoiceSnapshot(snapshot))
@@ -221,11 +332,20 @@ monitor.on('status', (message: string) => broadcastStatus(message))
 app.whenReady().then(async () => {
   const settingsPath = join(app.getPath('userData'), 'settings.json')
   if (existsSync(settingsPath)) {
-    settings = sanitizeSettings(JSON.parse(await readFile(settingsPath, 'utf8')) as Partial<AppSettings>)
+    const savedSettings = JSON.parse(await readFile(settingsPath, 'utf8')) as
+      Partial<AppSettings> & { sizeResetVersion?: number }
+    const shouldResetSize = savedSettings.sizeResetVersion !== SIZE_RESET_VERSION
+    settings = sanitizeSettings({
+      ...savedSettings,
+      size: shouldResetSize ? defaultSettings.size : savedSettings.size
+    })
+    if (shouldResetSize) await persistSettings()
   }
 
   createSettingsWindow()
   createOverlayWindow()
+  resizeOverlay(latestSnapshot)
+  registerHotkeys()
   const tokenPath = join(app.getPath('userData'), 'discord-refresh-token.enc')
   if (existsSync(tokenPath)) {
     if (!safeStorage.isEncryptionAvailable()) {
@@ -261,5 +381,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  for (const accelerator of registeredHotkeys) globalShortcut.unregister(accelerator)
+  registeredHotkeys = []
   void monitor.stop()
 })
