@@ -224,13 +224,25 @@ function resizeOverlay(snapshot: VoiceSnapshot): void {
     ? snapshot.participants.filter((participant) => participant.talking).length
     : snapshot.participants.length
   const contentHeight = snapshot.targetInVoice
-    ? Math.max(212, 124 + visibleCount * 60)
+    ? Math.max(
+      212,
+      124 + visibleCount * 60 + (settings.showAccountNames ? 0 : stackedControlsExtraHeight())
+    )
     : 520
   const width = Math.round(overlayContentWidth * settings.size)
   overlayWindow.setContentSize(width, Math.round(contentHeight * settings.size))
   if (settings.alignment === 'right' && width !== bounds.width) {
     overlayWindow.setPosition(bounds.x + bounds.width - width, bounds.y)
   }
+}
+
+function stackedControlsExtraHeight(): number {
+  const buttonCount = 1 +
+    Number(settings.showOverlayMute) +
+    Number(settings.showOverlayDeafen) +
+    Number(settings.showOverlayDisconnect)
+  const stackedHeight = 8 + buttonCount * 32 + Math.max(0, buttonCount - 1) * 6
+  return Math.max(0, stackedHeight - 40)
 }
 
 ipcMain.on('overlay:width', (event, width: unknown) => {
