@@ -104,6 +104,16 @@ function createSettingsWindow(): void {
   })
 }
 
+function showSettingsWindow(): void {
+  if (!settingsWindow || settingsWindow.isDestroyed()) {
+    createSettingsWindow()
+    return
+  }
+  if (settingsWindow.isMinimized()) settingsWindow.restore()
+  settingsWindow.show()
+  settingsWindow.focus()
+}
+
 function createOverlayWindow(): void {
   overlayWindow = new BrowserWindow({
     width: Math.round(360 * settings.size),
@@ -388,6 +398,12 @@ ipcMain.handle('discord:disconnect', async () => {
 ipcMain.handle('discord:voice-channel:leave', async () => {
   await monitor.leaveVoiceChannel()
 })
+ipcMain.handle('settings:open', (event) => {
+  if (!isOverlaySender(event.sender)) {
+    throw new Error('Only the overlay window can open the settings window.')
+  }
+  showSettingsWindow()
+})
 ipcMain.handle('overlay:get-bounds', (event) => {
   if (!isOverlaySender(event.sender) || !overlayWindow) {
     throw new Error('Only the overlay window can request its position.')
@@ -466,7 +482,7 @@ app.whenReady().then(async () => {
       createSettingsWindow()
       createOverlayWindow()
     } else {
-      settingsWindow?.show()
+      showSettingsWindow()
     }
   })
 })

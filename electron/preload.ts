@@ -9,6 +9,7 @@ const api: OverlayApi = {
   connect: (): Promise<ConnectResult> => ipcRenderer.invoke('discord:connect'),
   disconnect: () => ipcRenderer.invoke('discord:disconnect'),
   leaveVoiceChannel: () => ipcRenderer.invoke('discord:voice-channel:leave'),
+  openSettings: () => ipcRenderer.invoke('settings:open'),
   alignOverlayHorizontally: () => ipcRenderer.invoke('overlay:align-horizontal'),
   getOverlayWindowBounds: () => ipcRenderer.invoke('overlay:get-bounds'),
   moveOverlayWindow: (x, y) => ipcRenderer.invoke('overlay:move', x, y),

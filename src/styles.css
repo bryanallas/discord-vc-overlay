@@ -151,9 +151,9 @@ h1 span { color: #aa91ff; }
 .participant-count { flex: 0 0 auto; margin: 0; color: #8f91a0; }
 .participant-list { display: flex; width: max-content; max-width: 100%; flex-direction: column; gap: 6px; padding-top: 0; }
 .participant { display: flex; width: max-content; max-width: 100%; align-items: center; gap: 10px; min-height: 54px; padding: 6px 8px 6px 0; border: 1.5px solid transparent; border-radius: 11px; background: transparent; }
-.participant.info-right { flex-direction: row-reverse; }
+.participant.info-right { flex-direction: row-reverse; margin-left: auto; padding-right: 0; padding-left: 8px; }
 .participant.is-talking .avatar { outline: 2px solid #3bd58c; outline-offset: 0; box-shadow: 0 0 14px #37ce8121; }
-.avatar { width: 40px; height: 40px; flex: 0 0 auto; object-fit: cover; border-radius: 50%; background: #30323d; }
+.avatar { width: 40px; height: 40px; flex: 0 0 auto; object-fit: cover; border-radius: 50%; background: #30323d; -webkit-user-drag: none; }
 .participant-name { overflow: hidden; max-width: 210px; color: #ededf3; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .participant-state { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; color: #9699a6; }
 .overlay-empty { display: flex; min-height: 96px; align-items: center; justify-content: center; gap: 8px; color: #a3a5af; font-size: 11px; }

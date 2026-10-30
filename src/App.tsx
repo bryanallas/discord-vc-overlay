@@ -142,6 +142,14 @@ export default function App() {
     }
   }
 
+  const openSettings = async () => {
+    try {
+      await window.overlayApi.openSettings()
+    } catch (error) {
+      setStatus(`Could not open settings: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
   const toggleVoiceSetting = async (setting: VoiceSetting) => {
     try {
       await window.overlayApi.toggleVoiceSetting(setting)
@@ -158,6 +166,7 @@ export default function App() {
         participants={participants}
         onToggleVoiceSetting={(setting) => void toggleVoiceSetting(setting)}
         onDisconnect={() => void leaveVoiceChannel()}
+        onOpenSettings={() => void openSettings()}
         onDragError={(error) => {
           setStatus(`Could not move overlay: ${error instanceof Error ? error.message : 'Unknown error'}`)
         }}
@@ -473,9 +482,10 @@ function Overlay(props: {
   participants: Participant[]
   onToggleVoiceSetting: (setting: VoiceSetting) => void
   onDisconnect: () => void
+  onOpenSettings: () => void
   onDragError: (error: unknown) => void
 }) {
-  const { settings, snapshot, participants, onToggleVoiceSetting, onDisconnect, onDragError } = props
+  const { settings, snapshot, participants, onToggleVoiceSetting, onDisconnect, onOpenSettings, onDragError } = props
   const channelTitle = settings.showVcName ? snapshot.channelName : null
   const overlayRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{
@@ -577,6 +587,8 @@ function Overlay(props: {
                   src={participant.avatarUrl}
                   alt=""
                   className="avatar"
+                  draggable={false}
+                  onDragStart={(event) => event.preventDefault()}
                   onError={(event) => {
                     event.currentTarget.src = fallbackAvatar(participant.name)
                   }}
@@ -595,8 +607,7 @@ function Overlay(props: {
             <span>{snapshot.connected ? 'Waiting for voice chat' : 'Connect a bot to begin'}</span>
           </div>
         )}
-        {(settings.showOverlayMute || settings.showOverlayDeafen || settings.showOverlayDisconnect) && (
-          <div className={`overlay-controls ${settings.alignment === 'right' ? 'info-right' : ''} ${settings.showAccountNames ? '' : 'no-account-names'}`}>
+        <div className={`overlay-controls ${settings.alignment === 'right' ? 'info-right' : ''} ${settings.showAccountNames ? '' : 'no-account-names'}`}>
           {settings.showOverlayMute && <button
             className={`overlay-control ${snapshot.selfMuted ? 'active' : ''}`}
             title={snapshot.selfMuted ? 'Unmute microphone' : 'Mute microphone'}
@@ -626,8 +637,15 @@ function Overlay(props: {
           >
             <PhoneOff size={15} />
           </button>}
-          </div>
-        )}
+          <button
+            className="overlay-control settings-control"
+            title="Open settings"
+            aria-label="Open settings"
+            onClick={onOpenSettings}
+          >
+            <Settings2 size={15} />
+          </button>
+        </div>
       </div>
     </div>
   )

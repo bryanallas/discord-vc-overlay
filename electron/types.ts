@@ -56,6 +56,7 @@ export interface OverlayApi {
   connect: () => Promise<ConnectResult>
   disconnect: () => Promise<void>
   leaveVoiceChannel: () => Promise<void>
+  openSettings: () => Promise<void>
   alignOverlayHorizontally: () => Promise<void>
   getOverlayWindowBounds: () => Promise<{ x: number; y: number }>
   moveOverlayWindow: (x: number, y: number) => Promise<void>
