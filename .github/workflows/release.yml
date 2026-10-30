@@ -1,0 +1,45 @@
+name: Build desktop releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - os: macos-latest
+            platform: --mac
+            arch: --x64 --arm64
+          - os: windows-latest
+            platform: --win
+            arch: --x64
+    runs-on: ${{ matrix.os }}
+    env:
+      DISCORD_CLIENT_ID: ${{ vars.DISCORD_CLIENT_ID }}
+      DISCORD_TOKEN_EXCHANGE_URL: https://discord-vc-overlay-oauth.deflice.workers.dev/token
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate Discord application configuration
+        shell: bash
+        run: |
+          if [[ ! "$DISCORD_CLIENT_ID" =~ ^[0-9]{17,20}$ ]]; then
+            echo "Set the DISCORD_CLIENT_ID repository Actions variable before publishing a release."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.platform }} ${{ matrix.arch }} --publish always

@@ -6,8 +6,10 @@ export interface AppSettings {
   showOverlayMute: boolean
   showOverlayDeafen: boolean
   showOverlayDisconnect: boolean
+  showOverlayOutline: boolean
   opacity: number
   size: number
+  appearance: 'light' | 'dark' | 'system'
   alignment: 'left' | 'right'
   hotkeys: HotkeySettings
 }
@@ -53,7 +55,13 @@ export interface OverlayApi {
   saveSettings: (settings: Partial<AppSettings>) => Promise<AppSettings>
   connect: () => Promise<ConnectResult>
   disconnect: () => Promise<void>
+  leaveVoiceChannel: () => Promise<void>
+  alignOverlayHorizontally: () => Promise<void>
+  getOverlayWindowBounds: () => Promise<{ x: number; y: number }>
+  moveOverlayWindow: (x: number, y: number) => Promise<void>
   toggleVoiceSetting: (setting: VoiceSetting) => Promise<boolean>
+  platform: NodeJS.Platform
+  reportOverlayWidth: (width: number) => void
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => () => void
   onVoiceUpdate: (callback: (snapshot: VoiceSnapshot) => void) => () => void
   onStatusUpdate: (callback: (message: string) => void) => () => void

@@ -39,6 +39,8 @@ type RpcVoiceState = {
     self_mute?: boolean
     self_deaf?: boolean
   }
+  self_mute?: boolean
+  self_deaf?: boolean
   user?: RpcVoiceUser
 }
 
@@ -100,8 +102,10 @@ export class DiscordRpcMonitor extends EventEmitter {
   private guildId: string | null = null
   private guildName: string | null = null
   private authenticated = false
+  private selfUserId: string | null = null
   private selfMuted = false
   private selfDeafened = false
+  private voiceSettingQueue: Promise<void> = Promise.resolve()
   private stopped = true
   private readyResolve: (() => void) | null = null
   private readyReject: ((error: Error) => void) | null = null
@@ -153,14 +157,17 @@ export class DiscordRpcMonitor extends EventEmitter {
 
       this.authenticated = true
       this.subscribe('VOICE_CHANNEL_SELECT')
+      this.subscribe('VOICE_SETTINGS_UPDATE')
       await this.syncSelectedChannel()
-      void this.syncVoiceSettings().catch((error: unknown) => {
+      this.emit('status', 'Connected to your Discord desktop app.')
+      await this.syncVoiceSettings().catch((error: unknown) => {
         this.emit('status', `Could not read Discord voice settings: ${errorMessage(error)}`)
       })
       this.refreshTimer = setInterval(() => {
-        void this.syncSelectedChannel().catch((error: unknown) => this.emit('status', errorMessage(error)))
+        void this.syncSelectedChannel()
+          .then(() => this.syncVoiceSettings())
+          .catch((error: unknown) => this.emit('status', errorMessage(error)))
       }, 20_000)
-      this.emit('status', 'Connected to your Discord desktop app.')
       return tokens.refresh_token
     } catch (error) {
       await this.stop()
@@ -171,6 +178,7 @@ export class DiscordRpcMonitor extends EventEmitter {
   async stop(): Promise<void> {
     this.stopped = true
     this.authenticated = false
+    this.selfUserId = null
     if (this.refreshTimer) clearInterval(this.refreshTimer)
     this.refreshTimer = null
     if (this.readyTimer) clearTimeout(this.readyTimer)
@@ -190,18 +198,45 @@ export class DiscordRpcMonitor extends EventEmitter {
     this.emit('status', 'Disconnected')
   }
 
-  async toggleVoiceSetting(setting: VoiceSetting): Promise<boolean> {
+  toggleVoiceSetting(setting: VoiceSetting): Promise<boolean> {
+    const operation = this.voiceSettingQueue.then(() => this.applyVoiceSettingToggle(setting))
+    this.voiceSettingQueue = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
+  private async applyVoiceSettingToggle(setting: VoiceSetting): Promise<boolean> {
     if (!this.authenticated) throw new Error('Connect to Discord before changing voice settings.')
 
     await this.syncVoiceSettings()
-    const value = setting === 'mute' ? !this.selfMuted : !this.selfDeafened
-    await this.request('SET_VOICE_SETTINGS', { [setting]: value })
-    if (setting === 'mute') this.selfMuted = value
-    else this.selfDeafened = value
-    this.emitSnapshot(true, value
-      ? setting === 'mute' ? 'Microphone muted.' : 'Audio deafened.'
-      : setting === 'mute' ? 'Microphone unmuted.' : 'Audio undeafened.')
-    return value
+    let mute = this.selfMuted
+    let deaf = this.selfDeafened
+    if (setting === 'mute') {
+      if (deaf) {
+        mute = false
+        deaf = false
+      } else {
+        mute = !mute
+      }
+    } else {
+      mute = !deaf
+      deaf = !deaf
+    }
+
+    await this.request('SET_VOICE_SETTINGS', { mute, deaf })
+    this.selfMuted = mute
+    this.selfDeafened = deaf
+    this.emitSnapshot(true, setting === 'mute'
+      ? mute ? 'Microphone muted.' : 'Microphone unmuted.'
+      : deaf ? 'Audio deafened.' : 'Audio undeafened.')
+    return setting === 'mute' ? mute : deaf
+  }
+
+  async leaveVoiceChannel(): Promise<void> {
+    if (!this.authenticated) throw new Error('Connect to Discord before leaving a voice channel.')
+    if (!this.channelId) return
+
+    await this.request('SELECT_VOICE_CHANNEL', { channel_id: null })
+    await this.syncSelectedChannel()
   }
 
   private async syncVoiceSettings(): Promise<void> {
@@ -230,7 +265,11 @@ export class DiscordRpcMonitor extends EventEmitter {
 
   private async authenticate(accessToken: string): Promise<void> {
     const response = await this.request('AUTHENTICATE', { access_token: accessToken })
-    if (!response.data?.user) throw new Error('Discord did not authenticate the authorized account.')
+    const user = response.data?.user as RpcVoiceUser | undefined
+    if (!user || typeof user.id !== 'string') {
+      throw new Error('Discord did not authenticate the authorized account.')
+    }
+    this.selfUserId = user.id
   }
 
   private async syncSelectedChannel(): Promise<void> {
@@ -300,6 +339,12 @@ export class DiscordRpcMonitor extends EventEmitter {
   private updateParticipants(states: RpcVoiceState[], preserveTalking: boolean): void {
     const next = new Map<string, Participant>()
     for (const state of states) {
+      if (state.user?.id === this.selfUserId) {
+        const selfMute = state.voice_state?.self_mute ?? state.self_mute
+        const selfDeaf = state.voice_state?.self_deaf ?? state.self_deaf
+        if (typeof selfMute === 'boolean') this.selfMuted = selfMute
+        if (typeof selfDeaf === 'boolean') this.selfDeafened = selfDeaf
+      }
       const participant = toParticipant(state, preserveTalking && this.talkingUsers.has(state.user?.id ?? ''))
       if (participant) next.set(participant.id, participant)
     }
@@ -313,6 +358,13 @@ export class DiscordRpcMonitor extends EventEmitter {
     const voiceState = data as unknown as RpcVoiceState & { user_id?: string }
     const userId = voiceState.user?.id ?? voiceState.user_id
     if (!userId) return
+
+    if (userId === this.selfUserId && evt !== 'VOICE_STATE_DELETE') {
+      const selfMute = voiceState.voice_state?.self_mute ?? voiceState.self_mute
+      const selfDeaf = voiceState.voice_state?.self_deaf ?? voiceState.self_deaf
+      if (typeof selfMute === 'boolean') this.selfMuted = selfMute
+      if (typeof selfDeaf === 'boolean') this.selfDeafened = selfDeaf
+    }
 
     if (evt === 'VOICE_STATE_DELETE') {
       this.participants.delete(userId)
@@ -381,7 +433,13 @@ export class DiscordRpcMonitor extends EventEmitter {
     }
 
     if (message.evt === 'VOICE_CHANNEL_SELECT') {
-      void this.syncSelectedChannel().catch((error: unknown) => this.emit('status', errorMessage(error)))
+      void this.syncSelectedChannel()
+        .then(() => this.syncVoiceSettings())
+        .catch((error: unknown) => this.emit('status', errorMessage(error)))
+    } else if (message.evt === 'VOICE_SETTINGS_UPDATE') {
+      void this.syncVoiceSettings().catch((error: unknown) => {
+        this.emit('status', `Could not read Discord voice settings: ${errorMessage(error)}`)
+      })
     } else if (
       message.evt === 'VOICE_STATE_CREATE' ||
       message.evt === 'VOICE_STATE_UPDATE' ||
@@ -402,7 +460,7 @@ export class DiscordRpcMonitor extends EventEmitter {
 
   private request(
     cmd: string,
-    args?: Record<string, string | string[] | boolean>,
+    args?: Record<string, string | string[] | boolean | null>,
     timeoutMs = REQUEST_TIMEOUT_MS
   ): Promise<RpcEvent> {
     if (!this.socket || this.socket.destroyed) {
@@ -454,6 +512,7 @@ export class DiscordRpcMonitor extends EventEmitter {
     this.socket?.destroy()
     this.socket = null
     this.authenticated = false
+    this.selfUserId = null
     this.resetVoiceState()
     this.emitSnapshot(false, error.message)
     this.emit('status', error.message)
@@ -531,6 +590,21 @@ async function exchangeToken(
 }
 
 async function openDiscordIpc(): Promise<Socket> {
+  if (process.platform === 'win32') {
+    const errors: string[] = []
+    for (let index = 0; index < 10; index += 1) {
+      const pipePath = `\\\\?\\pipe\\discord-ipc-${index}`
+      try {
+        return await connectToSocket(pipePath)
+      } catch (error) {
+        errors.push(errorMessage(error))
+      }
+    }
+    throw new Error(
+      `Could not find Discord's local IPC connection. Open the Discord desktop app and retry. ${errors.at(-1) ?? ''}`.trim()
+    )
+  }
+
   const prefixes = [
     process.env.XDG_RUNTIME_DIR,
     process.env.TMPDIR,

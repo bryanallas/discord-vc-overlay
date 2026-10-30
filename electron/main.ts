@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, safeStorage, screen } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, safeStorage, screen } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -16,8 +16,10 @@ const defaultSettings: AppSettings = {
   showOverlayMute: true,
   showOverlayDeafen: true,
   showOverlayDisconnect: true,
+  showOverlayOutline: true,
   opacity: 0.92,
   size: 1,
+  appearance: 'system',
   alignment: 'left',
   hotkeys: {
     mute: 'CommandOrControl+Alt+Shift+M',
@@ -29,6 +31,7 @@ const defaultSettings: AppSettings = {
 let settings = { ...defaultSettings }
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
+let overlayContentWidth = 360
 let statusMessage = 'Not connected'
 let latestSnapshot: VoiceSnapshot = {
   connected: false,
@@ -42,6 +45,18 @@ let latestSnapshot: VoiceSnapshot = {
 }
 const monitor = new DiscordRpcMonitor()
 let registeredHotkeys: string[] = []
+let overlaySnapAnimation: NodeJS.Timeout | null = null
+
+function settingsBackgroundColor(): string {
+  const dark = settings.appearance === 'dark' ||
+    (settings.appearance === 'system' && nativeTheme.shouldUseDarkColors)
+  return dark ? '#111318' : '#f4f5f8'
+}
+
+function applyAppearance(): void {
+  nativeTheme.themeSource = settings.appearance
+  settingsWindow?.setBackgroundColor(settingsBackgroundColor())
+}
 
 function sendToWindows(channel: string, value: unknown): void {
   for (const window of [settingsWindow, overlayWindow]) {
@@ -71,7 +86,10 @@ function createSettingsWindow(): void {
     minWidth: 760,
     minHeight: 620,
     title: 'Discord VC Overlay',
-    backgroundColor: '#111318',
+    ...(process.platform === 'win32'
+      ? { icon: join(__dirname, '../../resources/app-icon.ico') }
+      : {}),
+    backgroundColor: settingsBackgroundColor(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -135,12 +153,20 @@ function sanitizeSettings(candidate: Partial<AppSettings>): AppSettings {
     showOverlayDisconnect: typeof candidate.showOverlayDisconnect === 'boolean'
       ? candidate.showOverlayDisconnect
       : settings.showOverlayDisconnect,
+    showOverlayOutline: typeof candidate.showOverlayOutline === 'boolean'
+      ? candidate.showOverlayOutline
+      : settings.showOverlayOutline,
     opacity: typeof candidate.opacity === 'number'
       ? Math.min(1, Math.max(0.35, candidate.opacity))
       : settings.opacity,
     size: typeof candidate.size === 'number'
       ? Math.min(1.5, Math.max(0.7, candidate.size))
       : settings.size,
+    appearance: candidate.appearance === 'light' ||
+      candidate.appearance === 'dark' ||
+      candidate.appearance === 'system'
+      ? candidate.appearance
+      : settings.appearance,
     alignment: candidate.alignment === 'left' || candidate.alignment === 'right'
       ? candidate.alignment
       : settings.alignment,
@@ -162,6 +188,7 @@ async function persistSettings(): Promise<void> {
 }
 
 function updateOverlaySettings(patch: Partial<AppSettings>): void {
+  if (patch.appearance !== undefined) applyAppearance()
   if (patch.keepOnTop !== undefined) {
     overlayWindow?.setAlwaysOnTop(settings.keepOnTop, 'floating')
   }
@@ -174,36 +201,74 @@ function updateOverlaySettings(patch: Partial<AppSettings>): void {
     patch.showAccountNames !== undefined ||
     patch.showOverlayMute !== undefined ||
     patch.showOverlayDeafen !== undefined ||
-    patch.showOverlayDisconnect !== undefined
+    patch.showOverlayDisconnect !== undefined ||
+    patch.showOverlayOutline !== undefined
   if (layoutChanged) resizeOverlay(latestSnapshot)
   sendToWindows('settings:update', settings)
 }
 
 function resizeOverlay(snapshot: VoiceSnapshot): void {
   if (!overlayWindow) return
+  const bounds = overlayWindow.getBounds()
   const visibleCount = settings.onlyShowTalking
     ? snapshot.participants.filter((participant) => participant.talking).length
     : snapshot.participants.length
   const contentHeight = snapshot.targetInVoice
     ? Math.max(212, 124 + visibleCount * 60)
     : 520
-  overlayWindow.setContentSize(
-    Math.round(360 * settings.size),
-    Math.round(contentHeight * settings.size)
-  )
+  const width = Math.round(overlayContentWidth * settings.size)
+  overlayWindow.setContentSize(width, Math.round(contentHeight * settings.size))
+  if (settings.alignment === 'right' && width !== bounds.width) {
+    overlayWindow.setPosition(bounds.x + bounds.width - width, bounds.y)
+  }
 }
+
+ipcMain.on('overlay:width', (event, width: unknown) => {
+  if (event.sender !== overlayWindow?.webContents) return
+  if (typeof width !== 'number' || !Number.isFinite(width)) {
+    broadcastStatus('The overlay reported an invalid width.')
+    return
+  }
+  overlayContentWidth = Math.min(360, Math.max(160, width))
+  resizeOverlay(latestSnapshot)
+})
 
 function placeOverlayWindow(): void {
   if (!overlayWindow) return
+  if (overlaySnapAnimation) clearInterval(overlaySnapAnimation)
+  overlaySnapAnimation = null
   const bounds = overlayWindow.getBounds()
-  const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y })
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  const display = screen.getDisplayMatching(bounds)
+  const { x: workAreaX, width: workAreaWidth } = display.workArea
   const margin = 12
   const x = settings.alignment === 'left'
     ? workAreaX + margin
     : workAreaX + workAreaWidth - bounds.width - margin
-  const y = Math.max(workAreaY + margin, Math.min(bounds.y, workAreaY + workAreaHeight - bounds.height - margin))
-  overlayWindow.setPosition(x, y)
+  const startX = bounds.x
+  const startY = bounds.y
+  const distance = x - startX
+  if (distance === 0) return
+
+  const duration = 260
+  const startedAt = Date.now()
+  overlaySnapAnimation = setInterval(() => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) {
+      if (overlaySnapAnimation) clearInterval(overlaySnapAnimation)
+      overlaySnapAnimation = null
+      return
+    }
+    const progress = Math.min(1, (Date.now() - startedAt) / duration)
+    const easedProgress = 1 - (1 - progress) ** 3
+    overlayWindow.setPosition(Math.round(startX + distance * easedProgress), startY)
+    if (progress === 1) {
+      if (overlaySnapAnimation) clearInterval(overlaySnapAnimation)
+      overlaySnapAnimation = null
+    }
+  }, 16)
+}
+
+function isOverlaySender(sender: Electron.WebContents): boolean {
+  return sender === overlayWindow?.webContents
 }
 
 function registerHotkeys(): void {
@@ -228,7 +293,7 @@ function registerHotkeys(): void {
     try {
       const registered = globalShortcut.register(accelerator, () => {
         const operation = action === 'disconnect'
-          ? disconnectDiscord()
+          ? monitor.leaveVoiceChannel()
           : monitor.toggleVoiceSetting(action === 'mute' ? 'mute' : 'deaf')
         void operation.catch((error: unknown) => {
           broadcastStatus(`Hotkey action failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -270,7 +335,7 @@ async function readSavedRefreshToken(): Promise<string | undefined> {
   const tokenPath = join(app.getPath('userData'), 'discord-refresh-token.enc')
   if (!existsSync(tokenPath)) return undefined
   if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('macOS secure storage is unavailable; sign in again.')
+    throw new Error('System secure storage is unavailable; sign in again.')
   }
   try {
     return safeStorage.decryptString(await readFile(tokenPath))
@@ -288,7 +353,6 @@ ipcMain.handle('settings:save', async (_event, patch: Partial<AppSettings>) => {
   await persistSettings()
   updateOverlaySettings(patch)
   if (patch.hotkeys !== undefined) registerHotkeys()
-  if (patch.alignment !== undefined) placeOverlayWindow()
   return settings
 })
 ipcMain.handle('discord:connect', async () => {
@@ -299,7 +363,7 @@ ipcMain.handle('discord:connect', async () => {
     return { connected: false, message: 'The Discord OAuth service is not configured in this build.' }
   }
   if (!safeStorage.isEncryptionAvailable()) {
-    return { connected: false, message: 'macOS secure storage is unavailable; sign-in was not saved.' }
+    return { connected: false, message: 'System secure storage is unavailable; sign-in was not saved.' }
   }
 
   try {
@@ -321,15 +385,48 @@ ipcMain.handle('discord:connect', async () => {
 ipcMain.handle('discord:disconnect', async () => {
   await disconnectDiscord()
 })
+ipcMain.handle('discord:voice-channel:leave', async () => {
+  await monitor.leaveVoiceChannel()
+})
+ipcMain.handle('overlay:get-bounds', (event) => {
+  if (!isOverlaySender(event.sender) || !overlayWindow) {
+    throw new Error('Only the overlay window can request its position.')
+  }
+  const { x, y } = overlayWindow.getBounds()
+  return { x, y }
+})
+ipcMain.handle('overlay:move', (event, x: unknown, y: unknown) => {
+  if (!isOverlaySender(event.sender) || !overlayWindow) {
+    throw new Error('Only the overlay window can move itself.')
+  }
+  if (
+    typeof x !== 'number' || !Number.isFinite(x) ||
+    typeof y !== 'number' || !Number.isFinite(y)
+  ) {
+    throw new Error('The overlay position must be finite screen coordinates.')
+  }
+  if (overlaySnapAnimation) clearInterval(overlaySnapAnimation)
+  overlaySnapAnimation = null
+  overlayWindow.setPosition(Math.round(x), Math.round(y))
+})
 ipcMain.handle('discord:voice-setting:toggle', async (_event, setting: 'mute' | 'deaf') => {
   if (setting !== 'mute' && setting !== 'deaf') throw new Error('Unsupported voice setting.')
   return monitor.toggleVoiceSetting(setting)
+})
+ipcMain.handle('overlay:align-horizontal', (event) => {
+  if (event.sender !== overlayWindow?.webContents) {
+    throw new Error('Only the overlay window can request horizontal alignment.')
+  }
+  placeOverlayWindow()
 })
 
 monitor.on('voice', (snapshot: VoiceSnapshot) => forwardVoiceSnapshot(snapshot))
 monitor.on('status', (message: string) => broadcastStatus(message))
 
 app.whenReady().then(async () => {
+  nativeTheme.on('updated', () => {
+    settingsWindow?.setBackgroundColor(settingsBackgroundColor())
+  })
   const settingsPath = join(app.getPath('userData'), 'settings.json')
   if (existsSync(settingsPath)) {
     const savedSettings = JSON.parse(await readFile(settingsPath, 'utf8')) as
@@ -342,6 +439,7 @@ app.whenReady().then(async () => {
     if (shouldResetSize) await persistSettings()
   }
 
+  applyAppearance()
   createSettingsWindow()
   createOverlayWindow()
   resizeOverlay(latestSnapshot)
@@ -349,7 +447,7 @@ app.whenReady().then(async () => {
   const tokenPath = join(app.getPath('userData'), 'discord-refresh-token.enc')
   if (existsSync(tokenPath)) {
     if (!safeStorage.isEncryptionAvailable()) {
-      broadcastStatus('macOS secure storage is unavailable; sign in again.')
+      broadcastStatus('System secure storage is unavailable; sign in again.')
     } else if (/^\d{17,20}$/.test(clientId) && tokenExchangeUrl) {
       try {
         const refreshToken = await readSavedRefreshToken()

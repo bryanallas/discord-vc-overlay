@@ -8,7 +8,13 @@ const api: OverlayApi = {
   saveSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('settings:save', settings),
   connect: (): Promise<ConnectResult> => ipcRenderer.invoke('discord:connect'),
   disconnect: () => ipcRenderer.invoke('discord:disconnect'),
+  leaveVoiceChannel: () => ipcRenderer.invoke('discord:voice-channel:leave'),
+  alignOverlayHorizontally: () => ipcRenderer.invoke('overlay:align-horizontal'),
+  getOverlayWindowBounds: () => ipcRenderer.invoke('overlay:get-bounds'),
+  moveOverlayWindow: (x, y) => ipcRenderer.invoke('overlay:move', x, y),
   toggleVoiceSetting: (setting) => ipcRenderer.invoke('discord:voice-setting:toggle', setting),
+  platform: process.platform,
+  reportOverlayWidth: (width) => ipcRenderer.send('overlay:width', width),
   onSettingsUpdate: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, settings: AppSettings) => callback(settings)
     ipcRenderer.on('settings:update', listener)

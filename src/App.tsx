@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignLeft,
   AlignRight,
@@ -11,6 +11,7 @@ import {
   MonitorCog,
   PhoneOff,
   Radio,
+  RotateCcw,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -27,8 +28,10 @@ const defaults: AppSettings = {
   showOverlayMute: true,
   showOverlayDeafen: true,
   showOverlayDisconnect: true,
+  showOverlayOutline: true,
   opacity: 0.92,
   size: 1,
+  appearance: 'system',
   alignment: 'left',
   hotkeys: {
     mute: 'CommandOrControl+Alt+Shift+M',
@@ -55,6 +58,20 @@ export default function App() {
   const [snapshot, setSnapshot] = useState(emptySnapshot)
   const [status, setStatus] = useState('Not connected')
   const [connecting, setConnecting] = useState(false)
+
+  useEffect(() => {
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyAppearance = () => {
+      const appearance = settings.appearance === 'system'
+        ? systemTheme.matches ? 'dark' : 'light'
+        : settings.appearance
+      document.documentElement.dataset.appearance = appearance
+      document.documentElement.style.colorScheme = appearance
+    }
+    applyAppearance()
+    systemTheme.addEventListener('change', applyAppearance)
+    return () => systemTheme.removeEventListener('change', applyAppearance)
+  }, [settings.appearance])
 
   useEffect(() => {
     const applySettings = (nextSettings: AppSettings) => {
@@ -117,6 +134,14 @@ export default function App() {
     }
   }
 
+  const leaveVoiceChannel = async () => {
+    try {
+      await window.overlayApi.leaveVoiceChannel()
+    } catch (error) {
+      setStatus(`Could not leave voice channel: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
   const toggleVoiceSetting = async (setting: VoiceSetting) => {
     try {
       await window.overlayApi.toggleVoiceSetting(setting)
@@ -132,7 +157,10 @@ export default function App() {
         snapshot={snapshot}
         participants={participants}
         onToggleVoiceSetting={(setting) => void toggleVoiceSetting(setting)}
-        onDisconnect={() => void disconnect()}
+        onDisconnect={() => void leaveVoiceChannel()}
+        onDragError={(error) => {
+          setStatus(`Could not move overlay: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        }}
       />
     )
   }
@@ -145,7 +173,11 @@ export default function App() {
           <span>voice<span className="brand-dot">.</span>overlay</span>
         </div>
         <div className="topbar-right">
-          <span className="platform-tag"><span className="platform-dot" /> macOS app</span>
+          <span className="platform-tag">
+            <span className="platform-dot" />
+            {window.overlayApi.platform === 'win32' ? 'Windows app' :
+              window.overlayApi.platform === 'darwin' ? 'macOS app' : 'Desktop app'}
+          </span>
         </div>
       </header>
 
@@ -210,7 +242,7 @@ export default function App() {
         </div>
         <div className="security-note">
           <ShieldCheck size={15} />
-          <span>Discord asks for permission. Your refresh token is encrypted and stored on this Mac.</span>
+          <span>Discord asks for permission. Your refresh token is encrypted and stored on this device.</span>
           <button className="help-button" title="Voice state is read from the Discord desktop app's authorized local RPC connection.">
             <CircleHelp size={15} />
           </button>
@@ -225,8 +257,34 @@ export default function App() {
             <h2>Overlay settings</h2>
             <p>Make it yours. Your changes save automatically.</p>
           </div>
+          <button
+            className="reset-settings-button"
+            title="Reset overlay settings to defaults"
+            aria-label="Reset overlay settings to defaults"
+            onClick={() => updateSetting(defaults)}
+          >
+            <RotateCcw size={15} />
+          </button>
         </div>
         <div className="settings-list">
+          <div className="appearance-row">
+            <div className="setting-icon"><MonitorCog size={17} /></div>
+            <div className="toggle-copy">
+              <strong>Settings appearance</strong>
+              <small>Choose the settings window theme</small>
+            </div>
+            <select
+              aria-label="Settings appearance"
+              value={settings.appearance}
+              onChange={(event) => updateSetting({
+                appearance: event.target.value as AppSettings['appearance']
+              })}
+            >
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="system">System</option>
+            </select>
+          </div>
           <ToggleRow
             icon={<MonitorCog size={17} />}
             title="Keep window in front"
@@ -275,6 +333,13 @@ export default function App() {
             description="Display the disconnect control on the overlay"
             checked={settings.showOverlayDisconnect}
             onChange={(checked) => updateSetting({ showOverlayDisconnect: checked })}
+          />
+          <ToggleRow
+            icon={<MonitorCog size={17} />}
+            title="Show overlay outline"
+            description="Display a border around the overlay"
+            checked={settings.showOverlayOutline}
+            onChange={(checked) => updateSetting({ showOverlayOutline: checked })}
           />
           <div className="slider-row">
             <div className="slider-label">
@@ -408,17 +473,97 @@ function Overlay(props: {
   participants: Participant[]
   onToggleVoiceSetting: (setting: VoiceSetting) => void
   onDisconnect: () => void
+  onDragError: (error: unknown) => void
 }) {
-  const { settings, snapshot, participants, onToggleVoiceSetting, onDisconnect } = props
+  const { settings, snapshot, participants, onToggleVoiceSetting, onDisconnect, onDragError } = props
   const channelTitle = settings.showVcName ? snapshot.channelName : null
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{
+    pointerId: number
+    screenX: number
+    screenY: number
+    latestScreenX: number
+    latestScreenY: number
+    x: number | null
+    y: number | null
+  } | null>(null)
+
+  useEffect(() => {
+    const root = overlayRef.current
+    if (!root) return
+
+    const observer = new ResizeObserver(() => {
+      window.overlayApi.reportOverlayWidth(root.getBoundingClientRect().width / settings.size)
+    })
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [settings.size])
+
   return (
-    <div className="overlay-root" style={{ zoom: settings.size }}>
-      <div className="overlay-card">
+    <div
+      className="overlay-root"
+      ref={overlayRef}
+      style={{ zoom: settings.size }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 ||
+          (event.target instanceof Element && event.target.closest('button'))) return
+        const drag: NonNullable<typeof dragRef.current> = {
+          pointerId: event.pointerId,
+          screenX: event.screenX,
+          screenY: event.screenY,
+          latestScreenX: event.screenX,
+          latestScreenY: event.screenY,
+          x: null,
+          y: null
+        }
+        dragRef.current = drag
+        event.currentTarget.setPointerCapture(event.pointerId)
+        void window.overlayApi.getOverlayWindowBounds().then((bounds) => {
+          if (dragRef.current !== drag) return
+          drag.x = bounds.x
+          drag.y = bounds.y
+          if (Math.abs(drag.latestScreenX - drag.screenX) < 2 &&
+            Math.abs(drag.latestScreenY - drag.screenY) < 2) return
+          void window.overlayApi.moveOverlayWindow(
+            bounds.x + drag.latestScreenX - drag.screenX,
+            bounds.y + drag.latestScreenY - drag.screenY
+          ).catch(onDragError)
+        }).catch(onDragError)
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current
+        if (!drag || drag.pointerId !== event.pointerId) return
+        drag.latestScreenX = event.screenX
+        drag.latestScreenY = event.screenY
+        if (drag.x === null || drag.y === null) return
+        if (Math.abs(drag.latestScreenX - drag.screenX) < 2 &&
+          Math.abs(drag.latestScreenY - drag.screenY) < 2) return
+        void window.overlayApi.moveOverlayWindow(
+          drag.x + drag.latestScreenX - drag.screenX,
+          drag.y + drag.latestScreenY - drag.screenY
+        ).catch(onDragError)
+      }}
+      onPointerUp={(event) => {
+        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null
+      }}
+      onPointerCancel={(event) => {
+        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null
+      }}
+      onDoubleClickCapture={(event) => {
+        if (event.target instanceof Element && event.target.closest('button')) return
+        event.preventDefault()
+        event.stopPropagation()
+        void window.overlayApi.alignOverlayHorizontally().catch(onDragError)
+      }}
+    >
+      <div className={`overlay-card ${settings.showOverlayOutline ? 'has-outline' : ''}`}>
         {channelTitle && (
-          <div className="overlay-header">
+          <div className={`overlay-header ${settings.alignment === 'right' ? 'info-right' : ''}`}>
             <span className="live-dot" />
-            <span className="channel-title">{channelTitle}</span>
-            <span className="participant-count">{participants.length}</span>
+            <div className="channel-heading-group">
+              <span className="channel-title">{channelTitle}</span>
+              <span className="participant-count">{participants.length}</span>
+            </div>
           </div>
         )}
         {participants.length > 0 ? (
@@ -451,7 +596,7 @@ function Overlay(props: {
           </div>
         )}
         {(settings.showOverlayMute || settings.showOverlayDeafen || settings.showOverlayDisconnect) && (
-          <div className="overlay-controls">
+          <div className={`overlay-controls ${settings.alignment === 'right' ? 'info-right' : ''} ${settings.showAccountNames ? '' : 'no-account-names'}`}>
           {settings.showOverlayMute && <button
             className={`overlay-control ${snapshot.selfMuted ? 'active' : ''}`}
             title={snapshot.selfMuted ? 'Unmute microphone' : 'Mute microphone'}
@@ -461,7 +606,6 @@ function Overlay(props: {
             onClick={() => onToggleVoiceSetting('mute')}
           >
             {snapshot.selfMuted ? <MicOff size={15} /> : <Mic size={15} />}
-            <span>{snapshot.selfMuted ? 'Unmute' : 'Mute'}</span>
           </button>}
           {settings.showOverlayDeafen && <button
             className={`overlay-control ${snapshot.selfDeafened ? 'active' : ''}`}
@@ -472,7 +616,6 @@ function Overlay(props: {
             onClick={() => onToggleVoiceSetting('deaf')}
           >
             <VolumeX size={15} />
-            <span>{snapshot.selfDeafened ? 'Undeafen' : 'Deafen'}</span>
           </button>}
           {settings.showOverlayDisconnect && <button
             className="overlay-control disconnect-control"
@@ -482,7 +625,6 @@ function Overlay(props: {
             onClick={onDisconnect}
           >
             <PhoneOff size={15} />
-            <span>Disconnect</span>
           </button>}
           </div>
         )}
